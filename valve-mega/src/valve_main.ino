@@ -1,172 +1,152 @@
-/*******************************************************
- * Valve-1-TFT – I2C-slave 0x05  •  Status på MCUFRIEND
- * Ready → Homing… → Rotating… → Done
- *******************************************************/
 #include <Wire.h>
-#include <SPI.h>
 #include <TMCStepper.h>
+#include <SPI.h>
 #include <MCUFRIEND_kbv.h>
 
-/* ---------- farver (fallback) ---------- */
-#ifndef BLACK
-#define BLACK  0x0000
-#endif
-#ifndef WHITE
-#define WHITE  0xFFFF
-#endif
+/* ---------- PINs ---------- */
+#define EN_PIN 53
+const int STEP_P[4] = {25, 48, 40, 36};
+const int DIR_P [4] = {27, 46, 42, 34};
+const int CS_P  [4] = {23, 44, 38, 32};
+const int SW_P  [4] = {A15, A14, A13, A12};
 
-/* ---------- pins ---------- */
-#define I2C_ADDR 0x05
-#define EN_PIN   53
-
-const int STEP_PINS[4]   = {25, 48, 40, 36};
-const int DIR_PINS [4]   = {27, 46, 42, 34};
-const int CS_PINS  [4]   = {23, 44, 38, 32};
-const int ENDSTOP_PINS[4]= {A15, A14, A13, A12};   /* NC */
-
-/* ---------- driver-konstanter ---------- */
-const float R_SENSE     = 0.11f;
-const int   MICROSTEPS  = 32;
-const int   STEPS_REV   = 200 * MICROSTEPS;
-const int   CURR_MA     = 1200;
-const int   HOMING_RPM  = 10;
-const int   MOVE_RPM    = 10;
-const int   STEPS_90deg = STEPS_REV / 4;
-
-/* ---------- globale ---------- */
+/* ---------- Driver ---------- */
+#define R_SENSE 0.11f
 TMC5160Stepper* drv[4];
-MCUFRIEND_kbv    tft;
-volatile bool    busyFlag = false;
 
-/* ---------- helpers ---------- */
-inline unsigned long usPerStep(int rpm)
-{
-  return (unsigned long)(1000000.0f / ((rpm / 60.0f) * STEPS_REV));
-}
+/* ---------- Timing ---------- */
+const int pulseHomeUs = 600;    // hurtig homing
+const int pulseMoveUs = 1200;   // normal rotation
+const int settleDelay = 5;
+const int maxSteps    = 4000;
 
-void stepMotor(int i)
-{
-  digitalWrite(STEP_PINS[i], HIGH);
-  delayMicroseconds(3);
-  digitalWrite(STEP_PINS[i], LOW);
-}
+/* ---------- MANUELT LAS-OFFSET ----------
+ * Microsteps pr. motor efter homing (CCW)
+ */
+int offsetStep[4] = {1530, 1570, 1500, 1510};
 
-bool endstopHit(int i)     { return digitalRead(ENDSTOP_PINS[i]); }
-void setDirCW (int i)      { digitalWrite(DIR_PINS[i], HIGH); }
-void setDirCCW(int i)      { digitalWrite(DIR_PINS[i], LOW ); }
+/* ---------- ULTRA drejning ----------
+ * 90° = 800 µsteps ved 16 µsteps/fuldstep
+ */
+const int UL_STEPS = 800;     // én værdi, gælder alle motorer
 
-void showStatus(const char* txt)
-{
-  tft.fillScreen(BLACK);
-  tft.setCursor(0, 90);
-  tft.setTextColor(WHITE, BLACK);
+/* ---------- I²C ---------- */
+#define I2C_ADDR 0x05
+volatile char cmdBuf[8]="";
+volatile bool newCmd=false, busy=false;
+
+/* ---------- TFT util ---------- */
+MCUFRIEND_kbv tft;
+void msg(const char* m){
+  Serial.println(m);
+  tft.fillScreen(0x0000);
+  tft.setTextColor(0xFFFF);
   tft.setTextSize(3);
-  tft.print(txt);
+  tft.setCursor(0,90);
+  tft.print(m);
 }
 
-/* ---------- bevægelses-sekvens ---------- */
-void doSequence()
-{
-  busyFlag = true;
-  Serial.println(F("[VALVE] start"));
-  digitalWrite(EN_PIN, LOW);
+/* ---------- fælles helpers ---------- */
+void moveSteps(int rem[4], int dUs){
+  for(int i=0;i<4;i++) digitalWrite(DIR_P[i],LOW);          // CCW
+  bool done=false;
+  while(!done){
+    done=true;
+    for(int i=0;i<4;i++){
+      if(rem[i]>0){ digitalWrite(STEP_P[i],HIGH); rem[i]--; done=false; }
+    }
+    delayMicroseconds(dUs);
+    for(int i=0;i<4;i++) digitalWrite(STEP_P[i],LOW);
+    delayMicroseconds(dUs);
+  }
+}
 
-  /* skærm */
-  showStatus("Homing...");
-  unsigned long d = usPerStep(HOMING_RPM);
-  bool allHomed = false;
-  while (!allHomed)
-  {
-    allHomed = true;
-    unsigned long t0 = micros();
-    for (int i = 0; i < 4; ++i)
-    {
-      if (!endstopHit(i))
-      {
-        setDirCCW(i);
-        stepMotor(i);
-        allHomed = false;
+/* ---------- homing ---------- */
+bool homeAll(){
+  msg("Homing...");
+  for(int i=0;i<4;i++) digitalWrite(DIR_P[i],LOW);
+  int steps=0; bool allHome=false;
+  while(!allHome && steps<maxSteps){
+    allHome=true;
+    for(int i=0;i<4;i++){
+      if(digitalRead(SW_P[i])==LOW){
+        digitalWrite(STEP_P[i],HIGH);
+        allHome=false;
       }
     }
-    while (micros() - t0 < d) {}
+    delayMicroseconds(pulseHomeUs);
+    for(int i=0;i<4;i++) digitalWrite(STEP_P[i],LOW);
+    delayMicroseconds(pulseHomeUs);
+    delay(settleDelay);
+    steps++;
   }
-  delay(200);
-
-  /* +90 deg */
-  showStatus("Rotating...");
-  d = usPerStep(MOVE_RPM);
-  for (int s = 0; s < STEPS_90deg; ++s)
-  {
-    unsigned long t0 = micros();
-    for (int i = 0; i < 4; ++i)
-    {
-      setDirCW(i);
-      stepMotor(i);
-    }
-    while (micros() - t0 < d) {}
-  }
-
-  /* færdig */
-  digitalWrite(EN_PIN, HIGH);
-  showStatus("Done");
-  busyFlag = false;
-  Serial.println(F("[VALVE] DONE"));
+  msg(allHome ? "Homed" : "TIMEOUT");
+  return allHome;
 }
 
-/* ---------- I2C ---------- */
-void onReceive(int)
-{
-  String cmd;
-  while (Wire.available()) cmd += (char)Wire.read();
-
-  if (cmd == "START" && !busyFlag) doSequence();
-  else if (cmd == "STOP")
-  {
-    busyFlag = false;
-    digitalWrite(EN_PIN, HIGH);
-  }
-}
-void onRequest() { Wire.write(busyFlag ? "BUSY" : "DONE"); }
+/* ---------- I²C ---------- */
+void onRecv(int){ int i=0; while(Wire.available()&&i<7) cmdBuf[i++]=Wire.read();
+                  cmdBuf[i]='\0'; newCmd=true; }
+void onReq(){ Wire.write(busy ? "BUSY" : "DONE"); }
 
 /* ---------- setup ---------- */
-void setup()
-{
+void setup(){
   Serial.begin(115200);
+  uint16_t id=tft.readID(); if(id==0xD3D3) id=0x9486;
+  tft.begin(id); tft.setRotation(1); msg("Valve V6");
 
-  /* TFT */
-  uint16_t id = tft.readID();
-  if (id == 0xD3D3) id = 0x9486;
-  tft.begin(id);
-  tft.setRotation(1);
-  showStatus("Ready");
-
-  /* pins */
-  pinMode(EN_PIN, OUTPUT);  digitalWrite(EN_PIN, HIGH);
-  for (int i = 0; i < 4; ++i)
-  {
-    pinMode(STEP_PINS[i], OUTPUT);
-    pinMode(DIR_PINS[i] , OUTPUT);
-    pinMode(CS_PINS [i] , OUTPUT); digitalWrite(CS_PINS[i], HIGH);
-    pinMode(ENDSTOP_PINS[i], INPUT_PULLUP);
+  pinMode(EN_PIN,OUTPUT); digitalWrite(EN_PIN,HIGH);
+  for(int i=0;i<4;i++){
+    pinMode(STEP_P[i],OUTPUT); pinMode(DIR_P[i],OUTPUT);
+    pinMode(CS_P[i],OUTPUT); digitalWrite(CS_P[i],HIGH);
+    pinMode(SW_P[i],INPUT_PULLUP);
   }
 
-  /* TMC5160 */
   SPI.begin();
-  for (int i = 0; i < 4; ++i)
-  {
-    drv[i] = new TMC5160Stepper(CS_PINS[i], R_SENSE);
-    drv[i]->begin();
-    drv[i]->rms_current(CURR_MA);
-    drv[i]->microsteps(MICROSTEPS);
-    drv[i]->en_pwm_mode(false);
+  for(int i=0;i<4;i++){
+    drv[i]=new TMC5160Stepper(CS_P[i],R_SENSE);
+    drv[i]->begin(); drv[i]->rms_current(600);
+    drv[i]->microsteps(16); drv[i]->pwm_autoscale(true);
   }
 
-  /* I2C */
   Wire.begin(I2C_ADDR);
-  Wire.onReceive(onReceive);
-  Wire.onRequest(onRequest);
+  Wire.onReceive(onRecv); Wire.onRequest(onReq);
 
-  Serial.println(F("Valve-1-TFT ready"));
+  Serial.println(F("✅ Valve V6 klar – send START"));
 }
 
-void loop() {}
+/* ---------- LASER-trin ---------- */
+void runLAS(){
+  if(!homeAll()) return;              // abort hvis TIMEOUT
+  delay(500);
+  int rem[4]; for(int i=0;i<4;i++) rem[i]=offsetStep[i];
+  msg("LAS Offset");
+  moveSteps(rem, pulseMoveUs);
+}
+
+/* ---------- ULTRA-trin ---------- */
+void runUL(){
+  delay(500);
+  int rem[4] = {UL_STEPS, UL_STEPS, UL_STEPS, UL_STEPS};
+  msg("ULTRA 90°");
+  moveSteps(rem, pulseMoveUs);
+}
+
+/* ---------- komplet sekvens ---------- */
+void runSequence(){
+  busy=true; digitalWrite(EN_PIN,LOW);
+  runLAS();          // homing + individuel offset
+  runUL();           // +90° uden ny homing
+  msg("Done");
+  digitalWrite(EN_PIN,HIGH);
+  busy=false;
+}
+
+/* ---------- loop ---------- */
+void loop(){
+  if(newCmd){
+    newCmd=false;
+    if(!busy && !strcmp(cmdBuf,"START")) runSequence();
+    else if(!busy && !strcmp(cmdBuf,"STOP")) msg("STOP");
+  }
+}
