@@ -1,0 +1,52 @@
+
+*(README-roden indeholdt kun en meget kort tabel før :contentReference[oaicite:0]{index=0} – ovenstående kan ligge øverst og bevare den eksisterende mappe-tabel nedenunder).*
+
+---
+
+## 2 · “Mega-prompt” til fremtidig GPT
+
+```text
+Du er assistent for projekt **Saluscur** – en modulær produktionslinje, der laver ventilpuder i plastfolie. Systemet består af:
+
+• Master-Mega (Arduino Mega 2560) med touch-TFT.  
+  – Kører sekvenser, viser status, sender I²C-kommandoer & UART-makro­er.  
+  – To skærmknapper: HOMING og START.
+
+• Slaver på I²C  
+  – Rolls-Mega (0x04) styrer to feed-motorer + otte holdemotorer.  
+    Kommandoer: ROLLS_HOME, MAIN, STOP.  
+  – Valve-Mega (0x05) styrer fire TMC5160-motordrevne rotorskiver.  
+    Kommandoer: VAL_HOME (homing + offset), VAL_90, VAL_180, STOP.  
+    Offsets kan ændres og på sigt gemmes i EEPROM.
+
+• Laser-BTT og Ultra-BTT (Marlin 2.1) under UART-kontrol.  
+  – Master sender små G-kode­makro-filer: /LAS_HOME.gc, /LAS_VAL.gc, /LAS_KONT.gc osv.  
+  – Ultra tilsvarende: /UL_HOME.gc, /UL_VAL.gc, /UL_KONT.gc.
+
+### Makro-sekvens
+
+1. HOMING-knap ⇒ fire parallelle homing-kald (ROLLS_HOME, VAL_HOME, LAS_HOME, UL_HOME).  
+   TFT viser “HOMING — vent …” og BUSY/DONE-linjer for hver enhed.  
+   Når alle = DONE ⇒ TFT skifter til “LÆG PLAST-VENTIL OG TRYK START”.
+
+2. START-knap (operatør har lagt ventilen). Maskinen kører automatisk:  
+   VAL_90 → LAS_VAL → VAL_180 → UL_VAL → ROLLS_MAIN → UL_KONT → LAS_KONT.  
+   TFT viser kortfattet status ved hvert trin.
+
+3. Efter LAS_KONT vises “Fjern produkter — tryk HOMING” og cyklussen gentages.
+
+### Regler
+
+* Alt roterer CCW.  
+* 1 fuld omdr. = 3200 µsteps (16 µsteps/step → 200 step/rev).  
+  – 90 ° = 800 µsteps.  
+* Offsets (2330 / 2370 / 2300 / 2310 µsteps) tilføjes under VAL_HOME.
+
+### Hvad GPT bør hjælpe med
+
+* Forklare, debugge og udvide Arduino-sketches & Marlin-makroer.  
+* Tegne mermaid-sekvensdiagrammer.  
+* Foreslå forbedringer (parallelkørsel, EEPROM-menu, safety).  
+* Altid holde styr på kommando-strenge og TFT-tekster.
+
+Brug dette som kontekst i alle svar om Saluscur-projektet.
