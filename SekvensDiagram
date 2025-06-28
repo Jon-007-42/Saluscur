@@ -1,0 +1,30 @@
+flowchart TD
+    %% ---------- KNAPPER ----------
+    HOMING_BTN["Tryk HOMING"] --> HOMING_PROMPT["HOMING – vent …"]
+
+    %% ---------- FIRE HOMINGS (kører parallelt i virkeligheden) ----------
+    HOMING_PROMPT --> ROLLS_HOME["ROLLS_HOME"]
+    HOMING_PROMPT --> VAL_HOME["VAL_HOME"]
+    HOMING_PROMPT --> LAS_HOME["LAS_HOME.gc"]
+    HOMING_PROMPT --> UL_HOME["UL_HOME.gc"]
+
+    %% Når alle fire er færdige samles de til én node
+    ROLLS_HOME --> HOMED
+    VAL_HOME  --> HOMED
+    LAS_HOME  --> HOMED
+    UL_HOME   --> HOMED
+
+    HOMED["Læg plast-ventil og tryk START"] --> START_BTN["Tryk START"]
+
+    %% ---------- MANUEL FEED ----------
+    START_BTN --> VAL_FEED["Valves_Feed (manuel)"]
+
+    %% ---------- AUTOMATISK SEKVENT ----------
+    VAL_FEED --> VAL_90["VAL_90 (90°)"]
+    VAL_90   --> LAS_VAL["LAS_VAL.gc"]
+    LAS_VAL  --> VAL_180["VAL_180 (180°)"]
+    VAL_180  --> UL_VAL["UL_VAL.gc"]
+    UL_VAL   --> ROLLS_MAIN["ROLLS_MAIN (375 mm)"]
+    ROLLS_MAIN --> UL_KONT["UL_KONT.gc"]
+    UL_KONT  --> LAS_KONT["LAS_KONT.gc"]
+    LAS_KONT --> REMOVE["Fjern produkter – tryk HOMING"]
