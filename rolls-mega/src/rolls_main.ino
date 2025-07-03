@@ -1,7 +1,7 @@
 /* --------- Rolls_V2_ASCII  -------------------------------------
    Status paa TFT + Serial  |  I2C-slave (addr 0x04)
-   Kommandoer:  "PRE"  -> Pretension  (M9+M10 10 mm, pause 4 s)
-                "MAIN" -> Main Feed   (alle 375 mm)
+   Kommandoer:  "ROLLS_HOME" -> Pretension  (M9+M10 10 mm, pause 4 s)
+                "ROLLS_MAIN" -> Main Feed   (alle 375 mm)
 ------------------------------------------------------------------ */
 #include <TMCStepper.h>
 #include <SPI.h>
@@ -24,16 +24,17 @@ void show(const char *txt)
 
 /* ---------- I2C ------------------------------------------------- */
 #define I2C_ADDR 0x04
-volatile char rxBuf[8] = "";
+volatile char rxBuf[12] = "";
 volatile bool newCmd = false;
+volatile bool busy   = false;
 void receiveEvent(int)
 {
   int i = 0;
-  while (Wire.available() && i < 7) rxBuf[i++] = Wire.read();
+  while (Wire.available() && i < 11) rxBuf[i++] = Wire.read();
   rxBuf[i] = '\0';
   newCmd   = true;
 }
-void requestEvent() { Wire.write("BUSY"); }
+void requestEvent() { Wire.write(busy ? "BUSY" : "DONE"); }
 
 /* ---------- Motor-hardware ------------------------------------- */
 #define EN_PIN 53
@@ -159,18 +160,20 @@ void loop()
   if (!newCmd) return;
   newCmd = false;
 
-  if (!strcmp(rxBuf, "PRE")) {
+  if (!strcmp(rxBuf, "ROLLS_HOME")) {
+    busy = true;
     show("Pretension...");
     pretension();
     show("Pause 4 s");
     delay(4000);
-    Wire.onRequest([]() { Wire.write("DONE"); });
+    busy = false;
   }
-  else if (!strcmp(rxBuf, "MAIN")) {
+  else if (!strcmp(rxBuf, "ROLLS_MAIN")) {
+    busy = true;
     show("Main feed...");
     mainFeed();
     show("Done");
-    Wire.onRequest([]() { Wire.write("DONE"); });
+    busy = false;
   }
   else show("Unknown cmd");
 }
